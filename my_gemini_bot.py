@@ -1,3 +1,5 @@
+import asyncio
+from aiohttp import web
 import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -6,13 +8,11 @@ import os
 import signal
 import sys
 
-# ===== ТВОИ ДАННЫЕ =====
-# Токен теперь берётся из переменных окружения (это безопасно для сервера)
+# Токены из переменных окружения (их мы зададим на Render)
 TELEGRAM_TOKEN = os.environ.get('7649686053:AAF0thTEPVcR510PYeL8wG_UpGAHV50rjng')
 GEMINI_API_KEY = os.environ.get('AIzaSyAoz_ILK1t9rZT9C4ciObCADkERmxG8fsM')
-# ========================
+PORT = int(os.environ.get('PORT', 10000))  # Render сам даст порт
 
-# Проверка, что ключи загружены
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     print("Ошибка: Не установлены переменные окружения TELEGRAM_TOKEN или GEMINI_API_KEY")
     sys.exit(1)
@@ -21,7 +21,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# Обработчик сообщений
+# Обработчик сообщений Telegram (точно такой же, как был)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     try:
@@ -31,23 +31,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_reply = f"Ошибка: {e}"
     await update.message.reply_text(bot_reply)
 
-def main():
-    # Создаем приложение
+# HTTP обработчик – он просто отвечает "Bot is running"
+async def handle_http(request):
+    return web.Response(text="Bot is running")
+
+async def main():
+    # Запускаем Telegram бота
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Обработка сигнала остановки, чтобы бот выключился gracefully
-    def signal_handler(sig, frame):
-        print("Остановка бота...")
-        application.stop()
-        sys.exit(0)
+    # Запускаем HTTP сервер, который будет слушать порт (нужен для Render)
+    app_web = web.Application()
+    app_web.router.add_get('/', handle_http)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    print(f"HTTP server started on port {PORT}")
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
+    # Запускаем бота (polling)
     print("Бот запущен и готов к работе!")
-    # Запускаем бота
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
